@@ -1,0 +1,32 @@
+# Keil / ARMCC build output
+MDK-ARM/car_balance_32/
+MDK-ARM/*.lst
+*.o
+*.d
+*.crf
+*.axf
+*.hex
+*.map
+*.htm
+*.lnp
+*.dep
+*.iex
+
+# Keil user/session files
+*.uvgui.*
+*.uvguix.*
+*.uvopt
+*.uvoptx
+
+# STM32CubeIDE / Eclipse generated metadata
+.metadata/
+Debug/
+Release/
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
