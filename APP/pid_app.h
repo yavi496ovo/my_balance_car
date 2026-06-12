@@ -3,12 +3,12 @@
 
 #include <stdint.h>
 
-#define PID_APP_TASK_PERIOD_MS           (5U)
+#define PID_APP_TASK_PERIOD_MS           (10U)
 
 typedef struct {
     float angle_deg;
     float target_angle_deg;
-    float speed_angle_deg;
+    float speed_pwm;
     float speed_target;
     float speed_feedback;
     float gyro_dps;

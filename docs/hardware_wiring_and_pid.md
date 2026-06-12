@@ -103,9 +103,8 @@
 ### 3.1 数据流
 
 ```text
-JY61P angle/gyro  --->  直立环 PD  ----+
-                                      +--> 左右电机 PWM
-编码器 left/right --->  速度环 PI  ----+
+JY61P angle/gyro  --->  直立环 K+D  --->  速度环增量式 PI  --->  左右电机 PWM
+编码器 left/right ------------------------^
 
 Target_Turn ------->  转向环 PD  ------> 左右轮差速
 ```
@@ -119,45 +118,43 @@ Target_Turn ------->  转向环 PD  ------> 左右轮差速
 
 ### 3.2 速度外环
 
-函数：`Velocity(Target_Speed, encoder_L, encoder_R)`
+函数：`Velocity(Target_Speed, encoder_L, encoder_R, vertical_out)`
 
 公式：
 
 ```text
-Err = encoder_L + encoder_R - Target_Speed
+speed = encoder_L + encoder_R
+Err = vertical_out + Target_Speed - speed
 Err_LowOut = (1 - Velocity_Filter) * Err + Velocity_Filter * last_Err_LowOut
-speed_integral += Err_LowOut
-speed_integral = limit(speed_integral, +/- Velocity_Integral_Limit)
 Velocity_Ki = Velocity_Kp / 200
-velocity_out = Velocity_Kp * Err_LowOut + Velocity_Ki * speed_integral
-```
-
-`velocity_out` 不是直接给电机的 PWM，而是作为直立环的目标角度修正量：
-
-```text
-target_angle_deg = Med_Angle + velocity_out
+Inc = Velocity_Kp * (Err_LowOut - last_error)
+    + Velocity_Ki * Err_LowOut
+speed_out += Inc
+velocity_out = vertical_out + speed_out
+velocity_out = limit(velocity_out, +/- Output_Limit)
 ```
 
 当前参数：
 
 | 参数 | 当前值 | 作用 |
 | --- | --- | --- |
-| `Target_Speed` | `0.0f` | 目标速度，0 表示原地平衡 |
-| `Velocity_Kp` | `0.00f` | 当前速度环实际关闭 |
+| `Target_Speed` | `5.0f` | 目标速度，0 表示原地平衡 |
+| `Velocity_Kp` | `0.07f` | 速度增量式 PI 比例项 |
 | `Velocity_Ki` | `Velocity_Kp / 200` | 由代码自动计算 |
 | `Velocity_Filter` | `0.5f` | 速度误差低通滤波系数 |
-| `Velocity_Integral_Limit` | `20000.0f` | 积分限幅 |
+| `Output_Limit` | `900.0f` | 速度环最终 PWM 输出限幅 |
 
-因此当前版本主要是直立环在工作，速度外环还没有参与闭环控制。
+`velocity_out` 现在就是基础 PWM 输出，包含直立环输入和速度环增量修正；后面只叠加转向差速和左右电机方向修正。
 
 ### 3.3 直立内环
 
-函数：`Vertical(target_angle_deg, Angle, gyro_Y)`
+函数：`Vertical(Med_Angle, Angle, gyro_Y)`
 
 公式：
 
 ```text
-vertical_out = Vertical_Kp * (Angle - target_angle_deg) + Vertical_Kd * gyro_Y
+Err = Angle - Med_Angle
+vertical_out = Vertical_Kp * Err + Vertical_Kd * gyro_Y
 ```
 
 当前参数：
@@ -201,7 +198,7 @@ pid_app.turn_out = Turn(0.0f, Target_Turn);
 公式：
 
 ```text
-PWM_out = Output_Direction * vertical_out
+PWM_out = Output_Direction * velocity_out
 left_raw = PWM_out - turn_out
 right_raw = PWM_out + turn_out
 left_raw/right_raw = limit(raw, +/- Output_Limit)
@@ -228,9 +225,9 @@ VOFA 每 20 ms 发送 12 个 float 通道：
 | --- | --- |
 | 0 | 当前角度 `angle_deg` |
 | 1 | 目标角度 `target_angle_deg` |
-| 2 | 速度环输出 `speed_angle_deg` |
+| 2 | 速度环最终 PWM 输出 `speed_pwm` |
 | 3 | 角速度 `gyro_dps` |
-| 4 | 直立环输出 `balance_pwm` |
+| 4 | 直立环 K+D 输出 `balance_pwm` |
 | 5 | 转向环输出 `turn_pwm` |
 | 6 | 左电机 PWM |
 | 7 | 右电机 PWM |
@@ -243,6 +240,6 @@ VOFA 每 20 ms 发送 12 个 float 通道：
 
 1. 架空车轮，确认电机正 PWM 方向一致。
 2. 手动转动车轮，确认左右编码器速度的正负方向一致。
-3. 保持 `Velocity_Kp = 0`、`Turn_Kp = 0`，先调直立环 `Med_Angle`、`Vertical_Kp`、`Vertical_Kd`。
-4. 直立稳定后再逐步增大 `Velocity_Kp`，让速度外环参与回正。
+3. 保持 `Turn_Kp = 0`，先调直立环 `Med_Angle`、`Vertical_Kp`、`Vertical_Kd`。
+4. 手动改变 `Target_Speed`，观察 VOFA 中角度、直立环输出和速度环 PWM 波形，确认直立环响应方向和幅度。
 5. 最后再接入转向控制，并给转向环传入真实 Z 轴角速度。

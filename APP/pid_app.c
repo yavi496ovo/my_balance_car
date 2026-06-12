@@ -4,14 +4,13 @@
 
 /* ===================== PID 调参区 ===================== */
 float Med_Angle = -1.62f;          /* 机械中值：车静止直立时的角度 */
-float Vertical_Kp = 45.0f;         /* 直立环 P：越大扶正越有力，过大容易抖 */
+float Vertical_Kp = 40.0f;         /* 直立环 P：越大扶正越有力，过大容易抖 */
 float Vertical_Kd = 1.0f;          /* 直立环 D：陀螺仪阻尼，越大越抑制前后摆 */
 
-float Target_Speed = 0.0f;        /* 目标速度：直接参与 Velocity()，0 表示原地平衡 */
-float Velocity_Kp = 0.00f;         /* 速度环 P：越大速度修正越强；为 0 时目标速度不会产生作用 */
-float Velocity_Ki;                 /* 速度环 I：在 Velocity() 中自动等于 Kp/250 */
+float Target_Speed = 5.0f;         /* 目标速度：直接参与 Velocity()，0 表示原地平衡 */
+float Velocity_Kp = 0.07f;         /* 速度环 P：增量式 PI 比例项 */
+float Velocity_Ki;                 /* 速度环 I：在 Velocity() 中自动等于 Kp/200 */
 float Velocity_Filter = 0.5f;      /* 速度误差滤波系数 a：越大越平滑，响应越慢 */
-float Velocity_Integral_Limit = 20000.0f; /* 速度环积分限幅，参考工程为 +/-20000 */
 
 float Target_Turn = 0.0f;          /* 目标转向：0 表示不转向 */
 float Turn_Kp = 0.0f;              /* 转向环 P */
@@ -34,7 +33,8 @@ typedef struct {
 
     float speed_feedback;
     float speed_error_lpf;
-    float speed_integral;
+    float speed_last_error;
+    float speed_out;
 
     float velocity_out;
     float target_angle_deg;
@@ -55,7 +55,7 @@ static float Limit_Value(float value, float min, float max);
 static void Limit_Motor(float *moto1, float *moto2);
 static int16_t Float_To_PWM(float value);
 static float Vertical(float Med, float Angle, float gyro_Y);
-static float Velocity(float Target, float encoder_L, float encoder_R);
+static float Velocity(float Target, float encoder_L, float encoder_R, float vertical_out);
 static float Turn(float gyro_Z, float Target_turn);
 static void Speed_Polarity_Test_Task(void);
 
@@ -89,36 +89,35 @@ static int16_t Float_To_PWM(float value)
     return (int16_t)(value - 0.5f);
 }
 
-static float Vertical(float Med, float Angle, float gyro_Y)
+static float Vertical(float Med, float Angle, float gyro_Y)//直立环
 {
     return Vertical_Kp * (Angle - Med) + Vertical_Kd * gyro_Y;
 }
 
-static float Velocity(float Target, float encoder_L, float encoder_R)
+static float Velocity(float Target, float encoder_L, float encoder_R, float vertical_out)//速度环
 {
     float Err;
     float Err_LowOut;
-    float temp;
+    float Inc;
+    float speed;
 
     Velocity_Ki = Velocity_Kp / 200.0f;
 
-    Err = (encoder_L + encoder_R) - Target;
-    Err_LowOut =
-        (1.0f - Velocity_Filter) * Err +
-        Velocity_Filter * pid_app.speed_error_lpf;
+    speed = encoder_L + encoder_R;
+    Err = vertical_out + Target - speed;//直立环反馈量+目标速度-实际编码器speed
+	//一阶滤波
+    Err_LowOut = (1.0f - Velocity_Filter) * Err + Velocity_Filter * pid_app.speed_error_lpf;
     pid_app.speed_error_lpf = Err_LowOut;
+    pid_app.speed_feedback = speed;
 
-    pid_app.speed_integral += Err_LowOut;
-    pid_app.speed_integral =
-        Limit_Value(pid_app.speed_integral,
-                    -Velocity_Integral_Limit,
-                    Velocity_Integral_Limit);
+    Inc = Velocity_Kp * (Err_LowOut - pid_app.speed_last_error) + Velocity_Ki * Err_LowOut;
 
-    pid_app.speed_feedback = encoder_L + encoder_R;
+    pid_app.speed_out += Inc;
+    pid_app.speed_out = Limit_Value(pid_app.speed_out, -Output_Limit, Output_Limit);
+    pid_app.velocity_out = Limit_Value(vertical_out + pid_app.speed_out, -Output_Limit, Output_Limit);
+    pid_app.speed_last_error = Err_LowOut;
 
-    temp = Velocity_Kp * Err_LowOut +
-           Velocity_Ki * pid_app.speed_integral;
-    return temp;
+    return pid_app.velocity_out;
 }
 
 static float Turn(float gyro_Z, float Target_turn)
@@ -146,10 +145,11 @@ static void Speed_Polarity_Test_Task(void)
 
     pid_app.speed_feedback = speed;
     pid_app.speed_error_lpf = speed;
-    pid_app.speed_integral = 0.0f;
-    pid_app.velocity_out = 0.0f;
+    pid_app.speed_last_error = 0.0f;
+    pid_app.speed_out = 0.0f;
+    pid_app.velocity_out = pwm;
     pid_app.target_angle_deg = Med_Angle;
-    pid_app.vertical_out = pwm;
+    pid_app.vertical_out = 0.0f;
     pid_app.turn_out = 0.0f;
     pid_app.left_pwm = Limit_Value(pwm, -Output_Limit, Output_Limit);
     pid_app.right_pwm = Limit_Value(pwm, -Output_Limit, Output_Limit);
@@ -173,7 +173,8 @@ static void pid_app_reset(void)
     pid_app.right_speed = 0.0f;
     pid_app.speed_feedback = 0.0f;
     pid_app.speed_error_lpf = 0.0f;
-    pid_app.speed_integral = 0.0f;
+    pid_app.speed_last_error = 0.0f;
+    pid_app.speed_out = 0.0f;
     pid_app.velocity_out = 0.0f;
     pid_app.target_angle_deg = Med_Angle;
     pid_app.vertical_out = 0.0f;
@@ -212,20 +213,16 @@ void pid_app_task(void)
     }
 
     /*
-     * 对应参考工程 Control()：
-     * Velocity_out = Velocity(Target_Speed, Encoder_Left, Encoder_Right);
-     * Vertical_out = Vertical(Velocity_out + Med_Angle, Angle, Gyro);
-     * MOTO1 = Vertical_out - Turn_out;
-     * MOTO2 = Vertical_out + Turn_out;
+     * 当前控制链：
+     * 直立环使用 Kp + Kd，输出姿态修正量。
+     * 速度环使用增量式 PI，叠加速度修正后输出最终 PWM。
      */
-    pid_app.velocity_out =
-        Velocity(Target_Speed, pid_app.left_speed, pid_app.right_speed);
-    pid_app.target_angle_deg = pid_app.velocity_out + Med_Angle;
-    pid_app.vertical_out =
-        Vertical(pid_app.target_angle_deg, angle, gyro);
+    pid_app.target_angle_deg = Med_Angle;
+    pid_app.vertical_out = Vertical(pid_app.target_angle_deg, angle, gyro);
+    pid_app.velocity_out = Velocity(Target_Speed,pid_app.left_speed,pid_app.right_speed,pid_app.vertical_out);
     pid_app.turn_out = Turn(0.0f, Target_Turn);
 
-    PWM_out = Output_Direction * pid_app.vertical_out;
+    PWM_out = Output_Direction * pid_app.velocity_out;
     MOTO1 = PWM_out - pid_app.turn_out;
     MOTO2 = PWM_out + pid_app.turn_out;
     Limit_Motor(&MOTO1, &MOTO2);
@@ -258,7 +255,7 @@ void pid_app_get_debug(pid_app_debug_t *debug)
 
     debug->angle_deg = pid_app.angle_deg;
     debug->target_angle_deg = pid_app.target_angle_deg;
-    debug->speed_angle_deg = pid_app.velocity_out;
+    debug->speed_pwm = pid_app.velocity_out;
     debug->speed_target = Target_Speed;
     debug->speed_feedback = pid_app.speed_feedback;
     debug->gyro_dps = pid_app.gyro_dps;

@@ -23,7 +23,7 @@ static void vofa_app_fill_packet(const motor_app_debug_t *debug)
 {
     vofa_app_tx_packet.channel[0] = debug->angle_deg;
     vofa_app_tx_packet.channel[1] = debug->target_angle_deg;
-    vofa_app_tx_packet.channel[2] = debug->speed_angle_deg;
+    vofa_app_tx_packet.channel[2] = debug->speed_pwm;
     vofa_app_tx_packet.channel[3] = debug->gyro_dps;
     vofa_app_tx_packet.channel[4] = debug->balance_pwm;
     vofa_app_tx_packet.channel[5] = debug->turn_pwm;
